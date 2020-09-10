@@ -9,7 +9,6 @@
   bool hasListeners;
   NSMutableDictionary *channels;
   GCKCastSession *castSession;
-  GCKMediaInformation *mediaInfo;
   bool playbackStarted;
   bool playbackEnded;
   NSUInteger currentItemID;
@@ -113,29 +112,6 @@ RCT_EXPORT_METHOD(launchExpandedControls) {
   });
 }
 
-RCT_EXPORT_METHOD(toggleSubtitles: (BOOL) enabled languageCode:(NSString *) languageCode) {
-  if (castSession == nil) return;
-
-  if (!enabled) {
-    [castSession.remoteMediaClient setActiveTrackIDs:@[]];
-    return;
-  }
-
-  NSArray *mediaTracks = mediaInfo.mediaTracks;
-  NSString *languageToSelect = languageCode != nil ? languageCode : DEFAULT_SUBTITLES_LANGUAGE;
-
-  if (mediaTracks == nil || [mediaTracks count] == 0) {
-    return;
-  }
-  
-  for(GCKMediaTrack *track in mediaTracks) {
-    if (track != nil && [[track languageCode] isEqualToString:languageToSelect]) {
-      [castSession.remoteMediaClient setActiveTrackIDs:@[@(track.identifier)]];
-      return;
-    }
-  }
-}
-
 RCT_EXPORT_METHOD(showCastPicker) {
   dispatch_async(dispatch_get_main_queue(), ^{
 [GCKCastContext.sharedInstance presentCastDialog];
@@ -212,6 +188,8 @@ RCT_EXPORT_METHOD(castMedia: (NSDictionary *)params
   NSString *posterUrl = [RCTConvert NSString:params[@"posterUrl"]];
   NSString *contentType = [RCTConvert NSString:params[@"contentType"]];
   NSDictionary *customData = [RCTConvert NSDictionary:params[@"customData"]];
+  NSDictionary *textTrackStyle = [RCTConvert NSDictionary:params[@"textTrackStyle"]];
+  NSArray *mediaTracks = [RCTConvert NSArray:params[@"mediaTracks"]];
   double streamDuration = [RCTConvert double:params[@"streamDuration"]];
   double playPosition = [RCTConvert double:params[@"playPosition"]];
 
@@ -244,15 +222,43 @@ RCT_EXPORT_METHOD(castMedia: (NSDictionary *)params
                                  width:480
                                 height:720]];
   }
-  GCKMediaInformation *mediaInfo =
+
+  GCKMediaTextTrackStyle *trackStyle = nil;
+  if(textTrackStyle) {
+    trackStyle = [GCKMediaTextTrackStyle createDefault];
+    [trackStyle setForegroundColor:[[GCKColor alloc] initWithCSSString:textTrackStyle[@"textColor"]]];
+    [trackStyle setBackgroundColor:[[GCKColor alloc] initWithCSSString:textTrackStyle[@"backgroundColor"]]];
+    [trackStyle setFontFamily:textTrackStyle[@"fontFamily"]];
+  }
+
+
+  NSMutableArray *tracks = [[NSMutableArray alloc] init];
+  for(id track in mediaTracks) {
+
+      NSNumber* ID = [track valueForKey:@"id"];
+      int trackId = [ID intValue];
+
+      GCKMediaTrack *lang =
+      [[GCKMediaTrack alloc] initWithIdentifier:trackId
+                                contentIdentifier:track[@"uri"]
+                                contentType:track[@"type"]
+                                type:GCKMediaTrackTypeText
+                                textSubtype:GCKMediaTextTrackSubtypeCaptions
+                                name:track[@"title"]
+                                languageCode:track[@"language"]
+                                customData:nil];
+      [tracks addObject:lang];
+   }
+
+   GCKMediaInformation *mediaInfo =
       [[GCKMediaInformation alloc] initWithContentID:mediaUrl
-                                          streamType:GCKMediaStreamTypeBuffered
-                                         contentType:contentType
-                                            metadata:metadata
-                                      streamDuration:streamDuration
-                                         mediaTracks:nil
-                                      textTrackStyle:nil
-                                          customData:customData];
+                                  streamType:GCKMediaStreamTypeBuffered
+                                  contentType:contentType
+                                  metadata:metadata
+                                  streamDuration:streamDuration
+                                  mediaTracks:tracks
+                                  textTrackStyle:trackStyle
+                                  customData:customData];
   // Cast the video.
   if (castSession) {
     [castSession.remoteMediaClient loadMedia:mediaInfo
@@ -287,6 +293,12 @@ RCT_EXPORT_METHOD(seek : (int)playPosition) {
   if (castSession) {
     [castSession.remoteMediaClient seekToTimeInterval:playPosition];
   }
+}
+
+RCT_EXPORT_METHOD(setPlaybackRate : (float)rate) {
+    if (castSession) {
+        [castSession.remoteMediaClient setPlaybackRate:rate];
+    }
 }
 RCT_EXPORT_METHOD(setVolume : (float)volume) {
     if (castSession) {
@@ -383,13 +395,11 @@ RCT_EXPORT_METHOD(setVolume : (float)volume) {
   if (!playbackStarted && mediaStatus.playerState == GCKMediaPlayerStatePlaying) {
     [self sendEventWithName:MEDIA_PLAYBACK_STARTED body:@{@"mediaStatus":status}];
     playbackStarted = true;
-    mediaInfo = mediaStatus.mediaInformation;
   }
 
   if (!playbackEnded && mediaStatus.idleReason == GCKMediaPlayerIdleReasonFinished) {
     [self sendEventWithName:MEDIA_PLAYBACK_ENDED body:@{@"mediaStatus":status}];
     playbackEnded = true;
-    mediaInfo = mediaStatus.mediaInformation;
   }
 }
 
